@@ -1,0 +1,44 @@
+--- /tmp/analyzeMFT/analyzemft/mftutils.py	2013-09-28 12:19:25.000000000 -0400
++++ ./mftutils.py	2013-09-22 22:56:02.000000000 -0400
+@@ -1,5 +1,8 @@
+ from datetime import date, datetime
+ import os
++from pytz import timezone
++
++fmt = "%Y-%m-%d %H:%M:%S.%f %Z%z"
+ 
+ # DevelNote: need to pass in localtz now
+ 
+@@ -23,7 +26,7 @@
+               
+         try:
+           if (localtz == True):
+-               self.dt = datetime.fromtimestamp(self.unixtime)
++              self.dt = datetime.fromtimestamp(self.unixtime)
+           else:
+                self.dt = datetime.utcfromtimestamp(self.unixtime)
+ 
+@@ -56,3 +59,23 @@
+        return ''.join( ['.', c][c.isalnum()] for c in chars )
+ 
+ 
++def convertTimezone(dateString, timez):
++
++    try:
++        tmpTime = datetime.strptime(dateString, "%Y-%m-%d %H:%M:%S.%f")
++    except:
++        try:
++            tmpTime = datetime.strptime(dateString, "%Y-%m-%d %H:%M:%S")
++        except:
++             return 0
++            
++    tmpTime_utc = tmpTime.replace(tzinfo=timezone('UTC'))
++
++    try:
++        tmpTime = tmpTime_utc.astimezone(timezone(timez))
++    except:
++        tmpTime = tmpTime_utc.astimezone(timezone('UTC'))
++
++
++    return tmpTime
++

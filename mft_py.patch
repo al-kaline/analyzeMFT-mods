@@ -1,0 +1,120 @@
+--- /tmp/analyzeMFT/analyzemft/mft.py	2013-09-28 12:19:25.000000000 -0400
++++ ./mft.py	2013-09-22 22:56:00.000000000 -0400
+@@ -16,6 +16,7 @@
+ from optparse import OptionParser
+ import ctypes
+ import bitparse
++from datetime import date, datetime
+ 
+ def set_default_options():
+ 
+@@ -77,7 +78,7 @@
+             if options.debug:
+                 print "Stardard Information:\n++Type: %s Length: %d Resident: %s Name Len:%d Name Offset: %d" % \
+                      (hex(int(ATRrecord['type'])),ATRrecord['len'],ATRrecord['res'],ATRrecord['nlen'],ATRrecord['name_off'])
+-            SIrecord = decodeSIAttribute(raw_record[read_ptr+ATRrecord['soff']:], options.localtz)
++            SIrecord = decodeSIAttribute(raw_record[read_ptr+ATRrecord['soff']:], options.localtz,options.timezone)
+             record['si'] = SIrecord
+             if options.debug:
+                 print "++CRTime: %s\n++MTime: %s\n++ATime: %s\n++EntryTime: %s" % \
+@@ -98,7 +99,7 @@
+ 
+         elif ATRrecord['type'] == 0x30:                 # File name
+             if options.debug: print "File name record"
+-            FNrecord = decodeFNAttribute(raw_record[read_ptr+ATRrecord['soff']:], options.localtz, record)
++            FNrecord = decodeFNAttribute(raw_record[read_ptr+ATRrecord['soff']:], options.localtz, record,options.timezone)
+             record['fn',record['fncnt']] = FNrecord
+             if options.debug: print "Name: %s (%d)" % (FNrecord['name'],record['fncnt'])
+             record['fncnt'] = record['fncnt'] + 1
+@@ -232,21 +233,21 @@
+     else:
+         csv_string.extend(['NoParent', 'NoParent'])
+ 
++
+     if record['fncnt'] > 0 and 'si' in record:
+         #filenameBuffer = [FNrecord['name'], str(record['si']['crtime'].dtstr),
+-        filenameBuffer = [record['filename'], str(record['si']['crtime'].dtstr),
+-                   record['si']['mtime'].dtstr, record['si']['atime'].dtstr, record['si']['ctime'].dtstr,
+-                   record['fn',0]['crtime'].dtstr, record['fn',0]['mtime'].dtstr,
+-                   record['fn',0]['atime'].dtstr, record['fn',0]['ctime'].dtstr]
++        filenameBuffer = [record['filename'], record['si']['crtime'],
++                   record['si']['mtime'], record['si']['atime'], record['si']['ctime'],
++                   record['fn',0]['crtime'], record['fn',0]['mtime'],
++                   record['fn',0]['atime'], record['fn',0]['ctime']]
+     elif 'si' in record:
+-        filenameBuffer = ['NoFNRecord', str(record['si']['crtime'].dtstr),
+-                   record['si']['mtime'].dtstr, record['si']['atime'].dtstr, record['si']['ctime'].dtstr,
++        filenameBuffer = ['NoFNRecord', str(record['si']['crtime']),
++                   record['si']['mtime'], record['si']['atime'], record['si']['ctime'],
+                    'NoFNRecord', 'NoFNRecord', 'NoFNRecord','NoFNRecord']
+     else:
+         filenameBuffer = ['NoFNRecord', 'NoSIRecord', 'NoSIRecord', 'NoSIRecord', 'NoSIRecord',
+                    'NoFNRecord', 'NoFNRecord', 'NoFNRecord','NoFNRecord']
+ 
+-
+     csv_string.extend(filenameBuffer)
+ 
+     if 'objid' in record:
+@@ -261,8 +262,8 @@
+ 
+     # If this goes above four FN attributes, the number of columns will exceed the headers
+     for i in range(1, record['fncnt']):
+-        filenameBuffer = [record['fn',i]['name'], record['fn',i]['crtime'].dtstr, record['fn',i]['mtime'].dtstr,
+-                   record['fn',i]['atime'].dtstr, record['fn',i]['ctime'].dtstr]
++        filenameBuffer = [record['fn',i]['name'], record['fn',i]['crtime'], record['fn',i]['mtime'],
++                   record['fn',i]['atime'], record['fn',i]['ctime']]
+         csv_string.extend(filenameBuffer)
+         filenameBuffer = ''
+ 
+@@ -570,13 +571,21 @@
+ 
+     return numruns, dataruns, error
+ 
+-def decodeSIAttribute(s, localtz):
++def decodeSIAttribute(s, localtz,timez):
+ 
+     d = {}
+     d['crtime'] = mftutils.WindowsTime(struct.unpack("<L",s[:4])[0],struct.unpack("<L",s[4:8])[0],localtz)
++    d['crtime'] = mftutils.convertTimezone(d['crtime'].dtstr, timez)
++
+     d['mtime'] = mftutils.WindowsTime(struct.unpack("<L",s[8:12])[0],struct.unpack("<L",s[12:16])[0],localtz)
++    d['mtime'] = mftutils.convertTimezone(d['mtime'].dtstr, timez)
++
+     d['ctime'] = mftutils.WindowsTime(struct.unpack("<L",s[16:20])[0],struct.unpack("<L",s[20:24])[0],localtz)
++    d['ctime'] = mftutils.convertTimezone(d['ctime'].dtstr, timez)
++    
+     d['atime'] = mftutils.WindowsTime(struct.unpack("<L",s[24:28])[0],struct.unpack("<L",s[28:32])[0],localtz)
++    d['atime'] = mftutils.convertTimezone(d['atime'].dtstr, timez)
++    
+     d['dos'] = struct.unpack("<I",s[32:36])[0]          # 4
+     d['maxver'] = struct.unpack("<I",s[36:40])[0]       # 4
+     d['ver'] = struct.unpack("<I",s[40:44])[0]          # 4
+@@ -588,7 +597,7 @@
+ 
+     return d
+ 
+-def decodeFNAttribute(s, localtz, record):
++def decodeFNAttribute(s, localtz, record, timez):
+ 
+     hexFlag = False
+     # File name attributes can have null dates.
+@@ -596,10 +605,19 @@
+     d = {}
+     d['par_ref'] = struct.unpack("<Lxx", s[:6])[0]      # Parent reference nummber + seq number = 8 byte "File reference to the parent directory."
+     d['par_seq'] = struct.unpack("<H",s[6:8])[0]        # Parent sequence number
++
+     d['crtime'] = mftutils.WindowsTime(struct.unpack("<L",s[8:12])[0],struct.unpack("<L",s[12:16])[0],localtz)
++    d['crtime'] = mftutils.convertTimezone(d['crtime'].dtstr, timez)
++
+     d['mtime'] = mftutils.WindowsTime(struct.unpack("<L",s[16:20])[0],struct.unpack("<L",s[20:24])[0],localtz)
++    d['mtime'] = mftutils.convertTimezone(d['mtime'].dtstr, timez)
++
+     d['ctime'] = mftutils.WindowsTime(struct.unpack("<L",s[24:28])[0],struct.unpack("<L",s[28:32])[0],localtz)
++    d['ctime'] = mftutils.convertTimezone(d['ctime'].dtstr, timez)
++
+     d['atime'] = mftutils.WindowsTime(struct.unpack("<L",s[32:36])[0],struct.unpack("<L",s[36:40])[0],localtz)
++    d['atime'] = mftutils.convertTimezone(d['atime'].dtstr, timez)
++
+     d['alloc_fsize'] = struct.unpack("<q",s[40:48])[0]
+     d['real_fsize'] = struct.unpack("<q",s[48:56])[0]
+     d['flags'] = struct.unpack("<d",s[56:64])[0]            # 0x01=NTFS, 0x02=DOS
